@@ -80,12 +80,17 @@ def split_chunks(text: str):
         if cut >= 8:
             sents[0] = first[:cut + 1].strip()
             sents.insert(1, first[cut + 1:].strip())
+    # 점진적 청크 크기: 20자 → 35자 → 70자… (앞은 빨리 소리내고, 재생이 생성을 따라잡게)
+    limits = [35, 70]
     groups = [sents[0]]
     cur = ""
+    li = 0
     for s in sents[1:]:
-        if cur and len(cur) + len(s) + 1 > 70:
+        lim = limits[min(li, len(limits) - 1)]
+        if cur and len(cur) + len(s) + 1 > lim:
             groups.append(cur)
             cur = s
+            li += 1
         else:
             cur = (cur + " " + s).strip()
     if cur:

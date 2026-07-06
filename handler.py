@@ -1,69 +1,39 @@
-# RunPod Serverless handler — Nina voice chain (Qwen3-TTS Sohee → RVC Heo Ye-eun)
+# RunPod Serverless handler v2 — Nina voice (CosyVoice3 SFT epoch_10 + zero-shot ref st_0030)
 # Input:  {"input": {"text": "...", "emotion": "neutral"}}
-# Output: streamed chunks {"pcm_b64": ..., "rate": 40000} per sentence group
+# Output: streamed chunks {"pcm_b64": ..., "rate": 24000} per sentence group
+#         (protocol identical to v1 — nina-tts.js works unchanged)
 import base64
 import os
 import re
 import sys
-import tempfile
 import time
+
+sys.path.insert(0, '/app/cosyvoice')
+sys.path.insert(0, '/app/cosyvoice/third_party/Matcha-TTS')
 
 import numpy as np
 import runpod
-import soundfile as sf
 import torch
 
-# ── Qwen3-TTS ──
-from qwen_tts import Qwen3TTSModel
+MODEL_DIR = os.environ.get("NINA_MODEL_DIR", "/app/pretrained/Fun-CosyVoice3-0.5B-2512")
+FT_LLM = os.environ.get("NINA_FT_LLM", "/app/models/nina_llm_fp16.pt")
+REF_WAV = os.environ.get("NINA_REF_WAV", "/app/ref/st_0030.wav")
+REF_TEXT = 'You are a helpful assistant.<|endofprompt|>이 정도가 한계네요. 한심해 보이려나요? 미력하기나마.'
 
-MODEL_ID = os.environ.get("NINA_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
-SPEAKER = os.environ.get("NINA_SPEAKER", "sohee")
+from cosyvoice.cli.cosyvoice import CosyVoice3  # noqa: E402
 
-EMOTION_INSTRUCT = {
-    "neutral":   "차분하고 담담한, 약간 무심한 말투로",
-    "caring":    "겉으론 무심한 척하지만 다정함이 묻어나는 부드러운 말투로",
-    "scolding":  "한숨 섞인 짜증으로 차갑게 쏘아붙이는 말투로",
-    "shy":       "수줍어서 작아지는 목소리로, 말끝을 흐리며",
-    "pleased":   "옅은 웃음기가 섞인 흐뭇한 말투로",
-    "worried":   "걱정이 배어나는 조심스러운 말투로",
-    "nostalgic": "옛 생각에 잠긴 듯 그리움이 묻어나는 잔잔한 말투로",
-}
-
-print("[nina-cloud] loading TTS...", flush=True)
+print("[nina-cloud] loading CosyVoice3...", flush=True)
 t0 = time.time()
-tts = Qwen3TTSModel.from_pretrained(
-    MODEL_ID, device_map="cuda:0", dtype=torch.bfloat16, attn_implementation="sdpa",
-)
-print(f"[nina-cloud] TTS loaded in {time.time()-t0:.1f}s", flush=True)
-
-# ── RVC (Applio infer core) ──
-APPLIO_DIR = os.environ.get("APPLIO_DIR", "/app/applio")
-sys.path.insert(0, APPLIO_DIR)
-os.chdir(APPLIO_DIR)
-from core import run_infer_script  # noqa: E402
-
-RVC_PTH = os.environ.get("NINA_RVC_PTH", "/app/models/nina_heo_ko.pth")
-RVC_INDEX = os.environ.get("NINA_RVC_INDEX", "/app/models/nina_heo_ko.index")
-RVC_EMBEDDER = os.environ.get("NINA_RVC_EMBEDDER", "korean-hubert-base")
-RVC_INDEX_RATE = float(os.environ.get("NINA_RVC_INDEX_RATE", "0.4"))
-
-
-def rvc_convert(wav: np.ndarray, sr: int):
-    with tempfile.TemporaryDirectory() as td:
-        ip = os.path.join(td, "in.wav")
-        op = os.path.join(td, "out.wav")
-        sf.write(ip, np.asarray(wav, dtype=np.float32).squeeze(), sr)
-        run_infer_script(
-            pitch=0, index_rate=RVC_INDEX_RATE, volume_envelope=1.0, protect=0.5,
-            f0_method="rmvpe", input_path=ip, output_path=op,
-            pth_path=RVC_PTH, index_path=RVC_INDEX,
-            split_audio=False, f0_autotune=False, f0_autotune_strength=1.0,
-            proposed_pitch=False, proposed_pitch_threshold=155.0,
-            clean_audio=False, clean_strength=0.2, export_format="WAV",
-            embedder_model=RVC_EMBEDDER,
-        )
-        out, out_sr = sf.read(op, dtype="float32")
-    return out, out_sr
+cv = CosyVoice3(MODEL_DIR, fp16=True)
+ck = torch.load(FT_LLM, map_location='cpu')
+cv.model.llm.load_state_dict(ck, strict=True)
+cv.model.llm.cuda().eval()
+del ck
+cv.add_zero_shot_spk(REF_TEXT, REF_WAV, 'nina')  # 레퍼런스 특징 1회 추출 캐시
+SR = cv.sample_rate
+# warmup (콜드스타트에서 CUDA 커널/캐시 예열)
+list(cv.inference_zero_shot('안녕.', REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False))
+print(f"[nina-cloud] loaded+warm in {time.time()-t0:.1f}s (sr={SR})", flush=True)
 
 
 def split_chunks(text: str):
@@ -80,7 +50,7 @@ def split_chunks(text: str):
         if cut >= 8:
             sents[0] = first[:cut + 1].strip()
             sents.insert(1, first[cut + 1:].strip())
-    # 점진적 청크 크기: 20자 → 35자 → 70자… (앞은 빨리 소리내고, 재생이 생성을 따라잡게)
+    # 점진적 청크 크기: 앞은 빨리 소리내고, 재생이 생성을 따라잡게
     limits = [35, 70]
     groups = [sents[0]]
     cur = ""
@@ -98,28 +68,25 @@ def split_chunks(text: str):
     return [g for g in groups if g]
 
 
-def to_s16le(x: np.ndarray) -> bytes:
-    x = np.clip(np.asarray(x, dtype=np.float32).squeeze(), -1.0, 1.0)
+def to_s16le(x: torch.Tensor) -> bytes:
+    x = x.squeeze().cpu().numpy().astype(np.float32)
+    x = np.clip(x, -1.0, 1.0)
     return (x * 32767).astype(np.int16).tobytes()
 
 
 def handler(job):
     inp = job.get("input", {}) or {}
     text = (inp.get("text") or "").strip()[:1000]
-    emotion = (inp.get("emotion") or "neutral").lower()
     if not text:
         yield {"error": "empty text"}
         return
-    instruct = EMOTION_INSTRUCT.get(emotion, EMOTION_INSTRUCT["neutral"])
     for s in split_chunks(text):
         t = time.time()
-        with torch.inference_mode():
-            wavs, sr = tts.generate_custom_voice(
-                text=s, language="Korean", speaker=SPEAKER, instruct=instruct,
-            )
-        wav, out_sr = rvc_convert(wavs[0], sr)
-        print(f"[nina-cloud] [{emotion}] '{s[:20]}' {time.time()-t:.2f}s", flush=True)
-        yield {"pcm_b64": base64.b64encode(to_s16le(wav)).decode(), "rate": int(out_sr)}
+        for out in cv.inference_zero_shot(s, REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False):
+            wav = out['tts_speech']
+            print(f"[nina-cloud] '{s[:20]}' {time.time()-t:.2f}s ({wav.shape[1]/SR:.1f}s)", flush=True)
+            yield {"pcm_b64": base64.b64encode(to_s16le(wav)).decode(), "rate": int(SR)}
+            t = time.time()
 
 
 runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})

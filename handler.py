@@ -3,10 +3,14 @@
 # Output: streamed chunks {"pcm_b64": ..., "rate": 24000} per sentence group
 #         (protocol identical to v1 — nina-tts.js works unchanged)
 import base64
+import faulthandler
 import os
 import re
 import sys
 import time
+
+# C레벨 크래시(segfault/CUDA illegal memory) 스택을 stderr로 덤프 — 하드 크래시 원인 규명
+faulthandler.enable()
 
 sys.path.insert(0, '/app/cosyvoice')
 sys.path.insert(0, '/app/cosyvoice/third_party/Matcha-TTS')
@@ -14,6 +18,21 @@ sys.path.insert(0, '/app/cosyvoice/third_party/Matcha-TTS')
 import numpy as np
 import runpod
 import torch
+
+# CUDA 에러를 발생 지점에서 즉시 보고 (기본은 비동기라 엉뚱한 곳에서 터진 것처럼 보임)
+os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
+
+
+def _diag():
+    try:
+        print(f"[nina-diag] torch {torch.__version__} cuda={torch.version.cuda} "
+              f"avail={torch.cuda.is_available()} dev={torch.cuda.get_device_name(0)} "
+              f"cap={torch.cuda.get_device_capability(0)}", flush=True)
+    except Exception as e:
+        print(f"[nina-diag] gpu info 실패: {e}", flush=True)
+
+
+_diag()
 
 MODEL_DIR = os.environ.get("NINA_MODEL_DIR", "/app/pretrained/Fun-CosyVoice3-0.5B-2512")
 FT_LLM = os.environ.get("NINA_FT_LLM", "/app/models/nina_llm_fp16.pt")
@@ -36,10 +55,15 @@ del ck
 torch.cuda.empty_cache()
 cv.add_zero_shot_spk(REF_TEXT, REF_WAV, 'nina')  # 레퍼런스 특징 1회 추출 캐시
 SR = cv.sample_rate
-# warmup — 실패해도 워커는 살린다 (실서비스 첫 요청에서 재시도됨). 원인은 로그로.
+# warmup — 실패해도 워커는 살린다. faulthandler가 C레벨 크래시도 stderr로 덤프.
 try:
-    list(cv.inference_zero_shot('오늘도 잘 부탁해요 편하게 말 걸어요.', REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False))
-    print(f"[nina-cloud] loaded+warm in {time.time()-t0:.1f}s (sr={SR})", flush=True)
+    print("[nina-diag] warmup 추론 시작...", flush=True)
+    sys.stderr.flush()
+    _n = 0
+    for _out in cv.inference_zero_shot('오늘도 잘 부탁해요 편하게 말 걸어요.', REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False):
+        _n += 1
+        print(f"[nina-diag] warmup 청크 {_n} shape={tuple(_out['tts_speech'].shape)}", flush=True)
+    print(f"[nina-cloud] loaded+warm in {time.time()-t0:.1f}s (sr={SR}), 청크 {_n}", flush=True)
 except Exception as _e:
     import traceback
     print(f"[nina-cloud] warmup 실패(무시하고 기동): {_e}", flush=True)

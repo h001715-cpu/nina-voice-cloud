@@ -19,12 +19,16 @@ RUN pip install --no-cache-dir \
     librosa==0.10.2 soundfile==0.12.1 numpy==1.26.4 \
     openai-whisper==20250625 pyarrow==18.1.0 matplotlib \
     omegaconf==2.3.0 inflect==7.3.1 \
+    conformer==0.3.2 diffusers==0.29.0 lightning==2.2.4 \
     "huggingface_hub[hf_transfer]"
 
 # 빌드 시 임포트 전수 검사 — 모듈이 하나라도 빠지면 여기서 빌드가 실패한다
 # (깨진 이미지가 'Latest'로 배포돼 워커가 조용히 죽는 사고 방지)
+# 주의: YAML 모델 조립 시점에 지연 임포트되는 모듈(flow_matching→conformer 등)까지 직접 임포트해 검사
 ENV PYTHONPATH=/app/cosyvoice:/app/cosyvoice/third_party/Matcha-TTS
-RUN python -c "import whisper, torchaudio, librosa, wetext, runpod, onnxruntime, pyarrow; from cosyvoice.cli.cosyvoice import CosyVoice3; print('IMPORT CHECK OK')"
+RUN python -c "import whisper, torchaudio, librosa, wetext, runpod, onnxruntime, pyarrow, conformer, diffusers, lightning; \
+import cosyvoice.flow.flow_matching, cosyvoice.flow.flow, cosyvoice.llm.llm, cosyvoice.hifigan.generator; \
+from cosyvoice.cli.cosyvoice import CosyVoice3; print('IMPORT CHECK OK')"
 
 # 베이스 모델 (HF 공개 저장소, llm.rl.pt 제외)
 ENV HF_HUB_ENABLE_HF_TRANSFER=1

@@ -31,9 +31,14 @@ cv.model.llm.cuda().eval()
 del ck
 cv.add_zero_shot_spk(REF_TEXT, REF_WAV, 'nina')  # 레퍼런스 특징 1회 추출 캐시
 SR = cv.sample_rate
-# warmup (콜드스타트에서 CUDA 커널/캐시 예열)
-list(cv.inference_zero_shot('안녕.', REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False))
-print(f"[nina-cloud] loaded+warm in {time.time()-t0:.1f}s (sr={SR})", flush=True)
+# warmup — 실패해도 워커는 살린다 (실서비스 첫 요청에서 재시도됨). 원인은 로그로.
+try:
+    list(cv.inference_zero_shot('오늘도 잘 부탁해요 편하게 말 걸어요.', REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False))
+    print(f"[nina-cloud] loaded+warm in {time.time()-t0:.1f}s (sr={SR})", flush=True)
+except Exception as _e:
+    import traceback
+    print(f"[nina-cloud] warmup 실패(무시하고 기동): {_e}", flush=True)
+    traceback.print_exc()
 
 
 def split_chunks(text: str):
@@ -65,7 +70,15 @@ def split_chunks(text: str):
             cur = (cur + " " + s).strip()
     if cur:
         groups.append(cur)
-    return [g for g in groups if g]
+    groups = [g for g in groups if g]
+    # 초단문 병합: 너무 짧은 조각은 conv 커널 크기보다 작아 모델이 크래시 → 이웃과 합침
+    merged = []
+    for g in groups:
+        if merged and (len(g) < 12 or len(merged[-1]) < 12):
+            merged[-1] = (merged[-1] + " " + g).strip()
+        else:
+            merged.append(g)
+    return merged
 
 
 def to_s16le(x: torch.Tensor) -> bytes:
@@ -80,13 +93,24 @@ def handler(job):
     if not text:
         yield {"error": "empty text"}
         return
+    yielded = False
     for s in split_chunks(text):
         t = time.time()
-        for out in cv.inference_zero_shot(s, REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False):
-            wav = out['tts_speech']
-            print(f"[nina-cloud] '{s[:20]}' {time.time()-t:.2f}s ({wav.shape[1]/SR:.1f}s)", flush=True)
-            yield {"pcm_b64": base64.b64encode(to_s16le(wav)).decode(), "rate": int(SR)}
-            t = time.time()
+        try:
+            # 문장 격리: 한 문장이 죽어도 워커가 죽지 않고 다음 문장으로 (커널 에러 등)
+            for out in cv.inference_zero_shot(s, REF_TEXT, REF_WAV, zero_shot_spk_id='nina', stream=False):
+                wav = out['tts_speech']
+                print(f"[nina-cloud] '{s[:20]}' {time.time()-t:.2f}s ({wav.shape[1]/SR:.1f}s)", flush=True)
+                yield {"pcm_b64": base64.b64encode(to_s16le(wav)).decode(), "rate": int(SR)}
+                yielded = True
+                t = time.time()
+        except Exception as e:
+            import traceback
+            print(f"[nina-cloud] chunk 실패 '{s[:20]}': {e}", flush=True)
+            traceback.print_exc()  # 정확한 원인을 워커 로그에 남김
+            continue
+    if not yielded:
+        yield {"error": "synthesis failed"}
 
 
 runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})

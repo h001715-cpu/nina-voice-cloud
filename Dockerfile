@@ -38,6 +38,16 @@ RUN python -c "from huggingface_hub import snapshot_download; snapshot_download(
 COPY models/ /app/models/
 RUN cat /app/models/cv3_llm_fp16.pt.part* > /app/models/nina_llm_fp16.pt && rm /app/models/cv3_llm_fp16.pt.part*
 
+# 빌드 시 '실제 모델 조립' 검사 — YAML 지연 임포트/누락 파일까지 전부 여기서 걸린다
+# (GPU 없는 빌드 머신에서도 CPU로 조립 가능. 이게 통과하면 워커에서 임포트류 크래시는 불가능)
+RUN python -c "\
+from cosyvoice.cli.cosyvoice import CosyVoice3; \
+import torch; \
+cv = CosyVoice3('/app/pretrained/Fun-CosyVoice3-0.5B-2512', fp16=False); \
+ck = torch.load('/app/models/nina_llm_fp16.pt', map_location='cpu'); \
+cv.model.llm.load_state_dict(ck, strict=True); \
+print('FULL CONSTRUCTION CHECK OK')"
+
 # 제로샷 레퍼런스 + 핸들러
 COPY ref/ /app/ref/
 COPY handler.py /app/handler.py

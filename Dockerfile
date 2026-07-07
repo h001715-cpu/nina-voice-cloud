@@ -9,13 +9,16 @@ WORKDIR /app
 # CosyVoice (third_party Matcha-TTS 포함)
 RUN git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git cosyvoice
 
-# 로컬 검증 환경과 동일 버전 고정 (WeTextProcessing/pynini 대신 wetext 사용)
+# 로컬 검증 환경의 "실제 임포트" 목록에서 추출한 버전 고정
+# (WeTextProcessing/pynini 대신 wetext 사용, torchaudio는 베이스에 없어 명시 설치)
 RUN pip install --no-cache-dir \
     runpod \
-    transformers==4.51.3 modelscope==1.20.0 hyperpyyaml==1.2.3 \
-    onnxruntime==1.18.0 wetext==0.0.4 librosa==0.10.2 conformer==0.3.2 \
-    diffusers==0.29.0 lightning==2.2.4 omegaconf==2.3.0 \
-    soundfile==0.12.1 numpy==1.26.4 inflect==7.3.1 \
+    torchaudio==2.3.1 \
+    transformers==4.51.3 modelscope==1.20.0 HyperPyYAML==1.2.3 \
+    onnxruntime==1.18.0 onnx==1.16.0 wetext==0.0.4 \
+    librosa==0.10.2 soundfile==0.12.1 numpy==1.26.4 \
+    openai-whisper==20250625 pyarrow==18.1.0 matplotlib \
+    omegaconf==2.3.0 inflect==7.3.1 \
     "huggingface_hub[hf_transfer]"
 
 # 베이스 모델 (HF 공개 저장소, llm.rl.pt 제외)

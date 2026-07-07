@@ -21,6 +21,11 @@ RUN pip install --no-cache-dir \
     omegaconf==2.3.0 inflect==7.3.1 \
     "huggingface_hub[hf_transfer]"
 
+# 빌드 시 임포트 전수 검사 — 모듈이 하나라도 빠지면 여기서 빌드가 실패한다
+# (깨진 이미지가 'Latest'로 배포돼 워커가 조용히 죽는 사고 방지)
+ENV PYTHONPATH=/app/cosyvoice:/app/cosyvoice/third_party/Matcha-TTS
+RUN python -c "import whisper, torchaudio, librosa, wetext, runpod, onnxruntime, pyarrow; from cosyvoice.cli.cosyvoice import CosyVoice3; print('IMPORT CHECK OK')"
+
 # 베이스 모델 (HF 공개 저장소, llm.rl.pt 제외)
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', local_dir='/app/pretrained/Fun-CosyVoice3-0.5B-2512', ignore_patterns=['llm.rl.pt','speech_tokenizer_v3.batch.onnx'])"

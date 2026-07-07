@@ -19,8 +19,8 @@ import numpy as np
 import runpod
 import torch
 
-# CUDA 에러를 발생 지점에서 즉시 보고 (기본은 비동기라 엉뚱한 곳에서 터진 것처럼 보임)
-os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
+# (CUDA_LAUNCH_BLOCKING은 warmup을 수십배 느리게 해 서버리스 워커 부팅을 막음 — 제거.
+#  faulthandler가 하드 크래시의 C 스택을 이미 stderr로 덤프하므로 진단엔 충분)
 
 
 def _diag():

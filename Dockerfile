@@ -15,17 +15,21 @@ RUN pip install --no-cache-dir \
     runpod \
     torchaudio==2.3.1 \
     transformers==4.51.3 modelscope==1.20.0 HyperPyYAML==1.2.3 \
-    onnxruntime==1.18.0 onnx==1.16.0 wetext==0.0.4 \
+    onnxruntime-gpu==1.18.0 onnx==1.16.0 wetext==0.0.4 \
     librosa==0.10.2 soundfile==0.12.1 numpy==1.26.4 \
-    openai-whisper==20250625 pyarrow==18.1.0 matplotlib \
+    openai-whisper==20250625 pyarrow==18.1.0 matplotlib==3.7.5 \
     omegaconf==2.3.0 inflect==7.3.1 \
     conformer==0.3.2 diffusers==0.29.0 lightning==2.2.4 \
+    hydra-core==1.3.2 gdown==5.1.0 pyworld==0.3.4 wget==3.2 \
     "huggingface_hub[hf_transfer]"
 
-# 순수 모듈 임포트만 검사 (GPU/모델 불필요 — 빌드 머신에 GPU 없으므로 여기까지만).
-# CosyVoice3 조립·추론 검증은 런타임 워밍업(비치명, traceback 로깅)이 담당한다.
+# 빌드시 '깊은 임포트' 검사 — GPU 불필요, 모델 조립 전. flow_matching 등을 실제 import 해
+# 지연 로딩 모듈(hydra/conformer 등)이 하나라도 빠지면 여기서 빌드가 실패한다(=배포 안 됨).
+# 이게 '하나씩 빠지는 두더지잡기'를 끝낸다: 빠진 게 있으면 워커 테스트가 아니라 빌드 로그에 즉시 뜸.
 ENV PYTHONPATH=/app/cosyvoice:/app/cosyvoice/third_party/Matcha-TTS
-RUN python -c "import whisper, torchaudio, librosa, wetext, runpod, onnxruntime, pyarrow, conformer, diffusers, lightning; print('MODULE IMPORT OK')"
+RUN python -c "import whisper, torchaudio, librosa, wetext, runpod, onnxruntime, pyarrow, conformer, diffusers, lightning, hydra, gdown, pyworld, wget; \
+import cosyvoice.flow.flow_matching, cosyvoice.flow.flow, cosyvoice.llm.llm, cosyvoice.hifigan.generator, matcha.models.components.flow_matching; \
+from cosyvoice.cli.cosyvoice import CosyVoice3; print('DEEP IMPORT OK')"
 
 # 베이스 모델 (HF 공개 저장소, llm.rl.pt 제외)
 ENV HF_HUB_ENABLE_HF_TRANSFER=1

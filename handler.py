@@ -19,6 +19,12 @@ import numpy as np
 import runpod
 import torch
 
+# 클라우드 Ampere GPU에서 추론 시 하드 크래시(CUDNN_STATUS_EXECUTION_FAILED) 방지.
+# CosyVoice flow-matching/보코더의 conv가 GPU별 cuDNN 커널에서 실패 → cuDNN 자체를 끈다.
+# (로컬 4070에선 되는데 클라우드 Ampere에선 터지던 그 크래시의 표준 워크어라운드)
+torch.backends.cudnn.enabled = False
+torch.backends.cudnn.benchmark = False
+
 # (CUDA_LAUNCH_BLOCKING은 warmup을 수십배 느리게 해 서버리스 워커 부팅을 막음 — 제거.
 #  faulthandler가 하드 크래시의 C 스택을 이미 stderr로 덤프하므로 진단엔 충분)
 
